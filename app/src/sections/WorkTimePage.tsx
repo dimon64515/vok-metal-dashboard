@@ -5,7 +5,7 @@ import { Users, Clock, Plus, Trash2, ChevronLeft, ChevronRight, Edit2, Check, X,
 interface WorkTimePageProps {
   employees: Employee[];
   attendance: AttendanceRecord[];
-  onAddEmployee: (e: Omit<Employee, 'id' | 'createdAt'>) => Promise<Employee | undefined>;
+  onAddEmployee: (e: Omit<Employee, 'id' | 'createdAt'>) => Promise<Employee | null>;
   onEditEmployee: (id: string, changes: Partial<Omit<Employee, 'id' | 'createdAt'>>) => Promise<void>;
   onRemoveEmployee: (id: string) => Promise<void>;
   onSetAttendance: (r: Omit<AttendanceRecord, 'id' | 'createdAt'>) => Promise<void>;

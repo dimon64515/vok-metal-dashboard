@@ -1,11 +1,12 @@
 import { useState, useRef } from 'react';
+import { useAdminAuth } from '@/contexts/AdminAuthContext';
 import { setSupabaseConfig, resetSupabaseClient, hasSupabaseConfig, getSupabaseConfig } from '@/lib/supabase';
 import { loadCategories, addThickness, removeThickness, resetCategories } from '@/types';
 import type { CategoryType, ExpenseEntry, ReceiptEntry, InventoryAdjustment, Employee, AttendanceRecord } from '@/types';
 import {
   Database, ArrowRight, ExternalLink, Download, Upload,
   AlertTriangle, Check, ChevronLeft, Trash2, Plus, X,
-  Layers, RotateCcw, ArrowLeft
+  Layers, RotateCcw, ArrowLeft, LogOut
 } from 'lucide-react';
 
 interface SettingsPageProps {
@@ -19,6 +20,7 @@ interface SettingsPageProps {
 
 export function SettingsPage({ onDone, expenses = [], receipts = [], adjustments = [], employees = [], attendance = [] }: SettingsPageProps) {
   const [activeSection, setActiveSection] = useState<'menu' | 'supabase' | 'backup' | 'thickness'>('menu');
+  const { isAdmin, logout } = useAdminAuth();
 
   const renderBack = () => (
     <div className="flex items-center gap-3">
@@ -90,6 +92,23 @@ export function SettingsPage({ onDone, expenses = [], receipts = [], adjustments
               </div>
               <ChevronLeft className="w-4 h-4 text-[#4a5578] rotate-180" />
             </button>
+
+            {/* Admin logout */}
+            {isAdmin && (
+              <button
+                onClick={() => { logout(); onDone(); }}
+                className="w-full flex items-center gap-4 bg-[#141b2d] border border-[#2a3454] rounded-xl p-4 text-left hover:border-[#ef4444] transition-colors"
+              >
+                <div className="w-11 h-11 rounded-xl bg-[rgba(239,68,68,0.15)] flex items-center justify-center flex-shrink-0">
+                  <LogOut className="w-5 h-5 text-[#ef4444]" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-[#e8ecf4]">Выйти из админки</p>
+                  <p className="text-xs text-[#8b95b5]">Завершить сессию редактирования</p>
+                </div>
+                <ChevronLeft className="w-4 h-4 text-[#4a5578] rotate-180" />
+              </button>
+            )}
           </div>
         )}
 

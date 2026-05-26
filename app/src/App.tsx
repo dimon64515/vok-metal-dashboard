@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { PageType } from '@/types';
 import { hasSupabaseConfig } from '@/lib/supabase';
 import { useStorage } from '@/hooks/useStorage';
+import { useAdminAuth } from '@/contexts/AdminAuthContext';
 import { SidebarNav, BottomNav } from '@/sections/Navigation';
 import { ExpensePage } from '@/sections/ExpensePage';
 import { ReceiptPage } from '@/sections/ReceiptPage';
@@ -13,6 +14,7 @@ import { WorkTimePage } from '@/sections/WorkTimePage';
 function App() {
   const [page, setPage] = useState<PageType>('expense');
   const [showSetup, setShowSetup] = useState(false);
+  const { isAdmin } = useAdminAuth();
 
   const storage = useStorage();
 
@@ -109,12 +111,19 @@ function App() {
       <main className="md:ml-[260px] min-h-screen relative z-10">
         <div className="max-w-5xl mx-auto px-4 md:px-6 py-5 md:py-8">
           {/* Sync indicator */}
-          <div className="flex items-center justify-end gap-2 mb-4">
-            <div className="w-2 h-2 rounded-full bg-[#10b981]" />
-            <span className="text-[11px] text-[#8b95b5] uppercase tracking-wider">Supabase</span>
+          <div className="flex items-center justify-end gap-3 mb-4">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-[#10b981]" />
+              <span className="text-[11px] text-[#8b95b5] uppercase tracking-wider">Supabase</span>
+            </div>
+            {isAdmin && (
+              <span className="text-[11px] text-[#f59e0b] uppercase tracking-wider flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#f59e0b]" /> Админ
+              </span>
+            )}
             <button
               onClick={() => setShowSetup(true)}
-              className="text-[11px] text-[#3b82f6] hover:text-[#60a5fa] transition-colors ml-1"
+              className="text-[11px] text-[#3b82f6] hover:text-[#60a5fa] transition-colors"
             >
               Настройки
             </button>
@@ -124,6 +133,12 @@ function App() {
             <div className="flex flex-col items-center justify-center py-20 text-center">
               <div className="w-10 h-10 border-3 border-[#f59e0b] border-t-transparent rounded-full animate-spin mb-4" />
               <p className="text-sm text-[#8b95b5]">Загрузка данных...</p>
+            </div>
+          ) : storage.error ? (
+            <div className="flex flex-col items-center justify-center py-20 text-center">
+              <div className="text-sm text-[#ef4444] bg-[rgba(239,68,68,0.1)] px-4 py-3 rounded-xl max-w-md">
+                {storage.error}
+              </div>
             </div>
           ) : (
             renderPage()

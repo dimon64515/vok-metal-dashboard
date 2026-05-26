@@ -1,13 +1,15 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import type { ExpenseEntry, ReceiptEntry, InventoryAdjustment, Employee, AttendanceRecord, AttendanceStatus } from '@/types';
 
 const SUPABASE_URL_KEY = 'supabase_url';
 const SUPABASE_KEY_KEY = 'supabase_anon_key';
 
+const DEFAULT_SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
+const DEFAULT_SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+
 export function getSupabaseConfig() {
   return {
-    url: localStorage.getItem(SUPABASE_URL_KEY) || '',
-    anonKey: localStorage.getItem(SUPABASE_KEY_KEY) || '',
+    url: localStorage.getItem(SUPABASE_URL_KEY) || DEFAULT_SUPABASE_URL,
+    anonKey: localStorage.getItem(SUPABASE_KEY_KEY) || DEFAULT_SUPABASE_ANON_KEY,
   };
 }
 
@@ -21,20 +23,40 @@ export function hasSupabaseConfig(): boolean {
   return !!cfg.url && !!cfg.anonKey;
 }
 
-let supabase: SupabaseClient | null = null;
-
-export function getSupabase(): SupabaseClient | null {
-  if (supabase) return supabase;
-  const cfg = getSupabaseConfig();
-  if (!cfg.url || !cfg.anonKey) return null;
-  supabase = createClient(cfg.url, cfg.anonKey, {
-    db: { schema: 'public' },
-  });
-  return supabase;
+export function getDefaultSupabaseConfig() {
+  return { url: DEFAULT_SUPABASE_URL, anonKey: DEFAULT_SUPABASE_ANON_KEY };
 }
 
 export function resetSupabaseClient() {
-  supabase = null;
+  // no-op: client is created per-request now
+}
+
+function getHeaders(): Record<string, string> {
+  const cfg = getSupabaseConfig();
+  return {
+    'apikey': cfg.anonKey,
+    'Authorization': `Bearer ${cfg.anonKey}`,
+    'Content-Type': 'application/json',
+  };
+}
+
+function getBaseUrl(): string {
+  const cfg = getSupabaseConfig();
+  return `${cfg.url}/rest/v1`;
+}
+
+async function supaFetch(endpoint: string, opts?: RequestInit) {
+  const url = `${getBaseUrl()}${endpoint}`;
+  const res = await fetch(url, {
+    ...opts,
+    headers: { ...getHeaders(), ...(opts?.headers || {}) },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => 'unknown error');
+    throw new Error(text);
+  }
+  if (res.status === 204) return null;
+  return res.json();
 }
 
 // Database types
@@ -85,85 +107,84 @@ function dbToReceipt(db: DbReceipt): ReceiptEntry {
 }
 
 export async function fetchExpenses(): Promise<ExpenseEntry[]> {
-  const client = getSupabase();
-  if (!client) return [];
-  const { data, error } = await client
-    .from('expenses')
-    .select('*')
-    .order('created_at', { ascending: false });
-  if (error) {
-    console.error('fetchExpenses error:', error);
+  try {
+    const data = await supaFetch('/expenses?select=*&order=created_at.desc') as DbExpense[];
+    return (data || []).map(dbToExpense);
+  } catch (err) {
+    console.error('fetchExpenses error:', err);
     return [];
   }
-  return (data || []).map(dbToExpense);
 }
 
 export async function fetchReceipts(): Promise<ReceiptEntry[]> {
-  const client = getSupabase();
-  if (!client) return [];
-  const { data, error } = await client
-    .from('receipts')
-    .select('*')
-    .order('created_at', { ascending: false });
-  if (error) {
-    console.error('fetchReceipts error:', error);
+  try {
+    const data = await supaFetch('/receipts?select=*&order=created_at.desc') as DbReceipt[];
+    return (data || []).map(dbToReceipt);
+  } catch (err) {
+    console.error('fetchReceipts error:', err);
     return [];
   }
-  return (data || []).map(dbToReceipt);
 }
 
 export async function insertExpense(
   entry: Omit<ExpenseEntry, 'id' | 'createdAt'>
 ): Promise<ExpenseEntry | null> {
-  const client = getSupabase();
-  if (!client) return null;
-  const { data, error } = await client
-    .from('expenses')
-    .insert({
-      date: entry.date,
-      category: entry.category,
-      thickness: entry.thickness,
-      area: entry.area,
-      weight: entry.weight,
-      note: entry.note || null,
-    })
-    .select()
-    .single();
-  if (error || !data) {
-    console.error('insertExpense error:', error);
+  try {
+    const data = await supaFetch('/expenses?select=*', {
+      method: 'POST',
+      headers: { 'Prefer': 'return=representation' },
+      body: JSON.stringify({
+        date: entry.date,
+        category: entry.category,
+        thickness: entry.thickness,
+        area: entry.area,
+        weight: entry.weight,
+        note: entry.note || null,
+      }),
+    }) as DbExpense[];
+    return data && data[0] ? dbToExpense(data[0]) : null;
+  } catch (err) {
+    console.error('insertExpense error:', err);
     return null;
   }
-  return dbToExpense(data);
 }
 
 export async function insertReceipt(
   entry: Omit<ReceiptEntry, 'id' | 'createdAt'>
 ): Promise<ReceiptEntry | null> {
-  const client = getSupabase();
-  if (!client) return null;
-  const { data, error } = await client
-    .from('receipts')
-    .insert({
-      date: entry.date,
-      category: entry.category,
-      thickness: entry.thickness,
-      quantity: entry.quantity,
-      note: entry.note || null,
-    })
-    .select()
-    .single();
-  if (error || !data) {
-    console.error('insertReceipt error:', error);
+  try {
+    const data = await supaFetch('/receipts?select=*', {
+      method: 'POST',
+      headers: { 'Prefer': 'return=representation' },
+      body: JSON.stringify({
+        date: entry.date,
+        category: entry.category,
+        thickness: entry.thickness,
+        quantity: entry.quantity,
+        note: entry.note || null,
+      }),
+    }) as DbReceipt[];
+    return data && data[0] ? dbToReceipt(data[0]) : null;
+  } catch (err) {
+    console.error('insertReceipt error:', err);
     return null;
   }
-  return dbToReceipt(data);
 }
 
 export async function deleteExpense(id: string): Promise<void> {
-  const client = getSupabase();
-  if (!client) return;
-  const { error } = await client.from('expenses').delete().eq('id', id);
-  if (error) console.error('deleteExpense error:', error);
+  try {
+    await supaFetch(`/expenses?id=eq.${id}`, { method: 'DELETE' });
+  } catch (err) {
+    console.error('deleteExpense error:', err);
+  }
+}
+
+export async function deleteReceipt(id: string): Promise<void> {
+  try {
+    await supaFetch(`/receipts?id=eq.${id}`, { method: 'DELETE' });
+  } catch (err) {
+    console.error('deleteReceipt error:', err);
+  }
 }
 
 export interface DbAdjustment {
@@ -189,54 +210,39 @@ function dbToAdjustment(db: DbAdjustment): InventoryAdjustment {
 }
 
 export async function fetchAdjustments(): Promise<InventoryAdjustment[]> {
-  const client = getSupabase();
-  if (!client) return [];
-  const { data, error } = await client
-    .from('adjustments')
-    .select('*')
-    .order('created_at', { ascending: false });
-  if (error) {
-    console.error('fetchAdjustments error:', error);
+  try {
+    const data = await supaFetch('/adjustments?select=*&order=created_at.desc') as DbAdjustment[];
+    return (data || []).map(dbToAdjustment);
+  } catch (err) {
+    console.error('fetchAdjustments error:', err);
     return [];
   }
-  return (data || []).map(dbToAdjustment);
 }
 
 export async function insertAdjustment(
   entry: Omit<InventoryAdjustment, 'id' | 'createdAt'>
 ): Promise<InventoryAdjustment> {
-  const client = getSupabase();
-  if (!client) throw new Error('Supabase not connected');
-  const { data, error } = await client
-    .from('adjustments')
-    .insert({
+  const data = await supaFetch('/adjustments?select=*', {
+    method: 'POST',
+    headers: { 'Prefer': 'return=representation' },
+    body: JSON.stringify({
       date: entry.date,
       category: entry.category,
       thickness: entry.thickness,
       quantity: entry.quantity,
       note: entry.note || null,
-    })
-    .select()
-    .single();
-  if (error || !data) {
-    console.error('insertAdjustment error:', error);
-    throw new Error(error?.message || 'Insert failed');
-  }
-  return dbToAdjustment(data);
+    }),
+  }) as DbAdjustment[];
+  if (!data || !data[0]) throw new Error('Insert failed');
+  return dbToAdjustment(data[0]);
 }
 
 export async function deleteAdjustment(id: string): Promise<void> {
-  const client = getSupabase();
-  if (!client) return;
-  const { error } = await client.from('adjustments').delete().eq('id', id);
-  if (error) console.error('deleteAdjustment error:', error);
-}
-
-export async function deleteReceipt(id: string): Promise<void> {
-  const client = getSupabase();
-  if (!client) return;
-  const { error } = await client.from('receipts').delete().eq('id', id);
-  if (error) console.error('deleteReceipt error:', error);
+  try {
+    await supaFetch(`/adjustments?id=eq.${id}`, { method: 'DELETE' });
+  } catch (err) {
+    console.error('deleteAdjustment error:', err);
+  }
 }
 
 // ===== EMPLOYEES =====
@@ -255,28 +261,33 @@ function dbToEmployee(db: Record<string, unknown>): Employee {
 }
 
 export async function fetchEmployees(): Promise<Employee[]> {
-  const client = getSupabase();
-  if (!client) return [];
-  const { data, error } = await client
-    .from('employees').select('*').order('created_at', { ascending: true });
-  if (error) { console.error('fetchEmployees error:', error); return []; }
-  return (data || []).map(dbToEmployee);
+  try {
+    const data = await supaFetch('/employees?select=*&order=created_at.asc') as Record<string, unknown>[];
+    return (data || []).map(dbToEmployee);
+  } catch (err) {
+    console.error('fetchEmployees error:', err);
+    return [];
+  }
 }
 
 export async function insertEmployee(emp: Omit<Employee, 'id' | 'createdAt'>): Promise<Employee> {
-  const client = getSupabase();
-  if (!client) throw new Error('Supabase not connected');
-  const { data, error } = await client
-    .from('employees')
-    .insert({ name: emp.name, hourly_rate: emp.hourlyRate, night_hourly_rate: emp.nightHourlyRate, day_shift_hours: emp.dayShiftHours, night_shift_hours: emp.nightShiftHours, active: emp.active })
-    .select().single();
-  if (error || !data) throw new Error(error?.message || 'Insert employee failed');
-  return dbToEmployee(data);
+  const data = await supaFetch('/employees?select=*', {
+    method: 'POST',
+    headers: { 'Prefer': 'return=representation' },
+    body: JSON.stringify({
+      name: emp.name,
+      hourly_rate: emp.hourlyRate,
+      night_hourly_rate: emp.nightHourlyRate,
+      day_shift_hours: emp.dayShiftHours,
+      night_shift_hours: emp.nightShiftHours,
+      active: emp.active,
+    }),
+  }) as Record<string, unknown>[];
+  if (!data || !data[0]) throw new Error('Insert employee failed');
+  return dbToEmployee(data[0]);
 }
 
 export async function updateEmployee(id: string, changes: Partial<Omit<Employee, 'id' | 'createdAt'>>): Promise<void> {
-  const client = getSupabase();
-  if (!client) return;
   const db: Record<string, unknown> = {};
   if (changes.name !== undefined) db.name = changes.name;
   if (changes.hourlyRate !== undefined) db.hourly_rate = changes.hourlyRate;
@@ -284,14 +295,17 @@ export async function updateEmployee(id: string, changes: Partial<Omit<Employee,
   if (changes.dayShiftHours !== undefined) db.day_shift_hours = changes.dayShiftHours;
   if (changes.nightShiftHours !== undefined) db.night_shift_hours = changes.nightShiftHours;
   if (changes.active !== undefined) db.active = changes.active;
-  const { error } = await client.from('employees').update(db).eq('id', id);
-  if (error) throw new Error(error.message);
+  await supaFetch(`/employees?id=eq.${id}`, {
+    method: 'PATCH',
+    headers: { 'Prefer': 'return=minimal' },
+    body: JSON.stringify(db),
+  });
 }
 
 export async function deleteEmployee(id: string): Promise<void> {
-  const client = getSupabase();
-  if (!client) return;
-  await client.from('employees').delete().eq('id', id);
+  try {
+    await supaFetch(`/employees?id=eq.${id}`, { method: 'DELETE' });
+  } catch {}
 }
 
 // ===== ATTENDANCE =====
@@ -309,34 +323,37 @@ function dbToAttendance(db: Record<string, unknown>): AttendanceRecord {
 }
 
 export async function fetchAttendance(year: number, month: number): Promise<AttendanceRecord[]> {
-  const client = getSupabase();
-  if (!client) return [];
-  const mm = String(month + 1).padStart(2, '0');
-  const lastDay = new Date(year, month + 1, 0).getDate();
-  const from = `${year}-${mm}-01`;
-  const to = `${year}-${mm}-${String(lastDay).padStart(2, '0')}`;
-  const { data, error } = await client
-    .from('attendance').select('*').gte('date', from).lte('date', to);
-  if (error) { console.error('fetchAttendance error:', error); return []; }
-  return (data || []).map(dbToAttendance);
+  try {
+    const mm = String(month + 1).padStart(2, '0');
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    const from = `${year}-${mm}-01`;
+    const to = `${year}-${mm}-${String(lastDay).padStart(2, '0')}`;
+    const data = await supaFetch(`/attendance?select=*&date=gte.${from}&date=lte.${to}`) as Record<string, unknown>[];
+    return (data || []).map(dbToAttendance);
+  } catch (err) {
+    console.error('fetchAttendance error:', err);
+    return [];
+  }
 }
 
 export async function upsertAttendance(record: Omit<AttendanceRecord, 'id' | 'createdAt'>): Promise<AttendanceRecord> {
-  const client = getSupabase();
-  if (!client) throw new Error('Supabase not connected');
-  const { data, error } = await client
-    .from('attendance')
-    .upsert(
-      { employee_id: record.employeeId, date: record.date, status: record.status, hours: record.hours, note: record.note || null },
-      { onConflict: 'employee_id,date,status' }
-    )
-    .select().single();
-  if (error || !data) throw new Error(error?.message || 'Upsert attendance failed');
-  return dbToAttendance(data);
+  const data = await supaFetch('/attendance?select=*', {
+    method: 'POST',
+    headers: { 'Prefer': 'resolution=merge-duplicates,return=representation' },
+    body: JSON.stringify({
+      employee_id: record.employeeId,
+      date: record.date,
+      status: record.status,
+      hours: record.hours,
+      note: record.note || null,
+    }),
+  }) as Record<string, unknown>[];
+  if (!data || !data[0]) throw new Error('Upsert attendance failed');
+  return dbToAttendance(data[0]);
 }
 
 export async function deleteAttendanceRecord(id: string): Promise<void> {
-  const client = getSupabase();
-  if (!client) return;
-  await client.from('attendance').delete().eq('id', id);
+  try {
+    await supaFetch(`/attendance?id=eq.${id}`, { method: 'DELETE' });
+  } catch {}
 }
