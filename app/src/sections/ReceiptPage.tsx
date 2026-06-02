@@ -201,6 +201,15 @@ export function ReceiptPage({ receipts, onAdd, onDelete, onCheckDuplicate }: Rec
             )}
           </div>
 
+          {scannedData.fallback && (
+            <div className="bg-[rgba(245,158,11,0.1)] border border-[#f59e0b]/30 rounded-xl p-3 text-sm text-[#f59e0b]">
+              <p className="font-medium">Автоматическое распознавание недоступно</p>
+              <p className="text-xs mt-1 text-[#f59e0b]/80">
+                {scannedData.message || 'Этот сертификат загружается в браузере. Откройте ссылку, скопируйте данные и введите вручную.'}
+              </p>
+            </div>
+          )}
+
           {scannedData.batchId && (
             <div className="text-xs text-[#8b95b5]">
               Плавка / ID: <span className="text-[#e8ecf4] font-mono">{scannedData.batchId}</span>

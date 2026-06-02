@@ -10,6 +10,8 @@ export interface QrParseResult {
   sourceUrl?: string;
   note?: string;
   raw: string;
+  fallback?: boolean;
+  message?: string;
 }
 
 function detectCategory(text: string): CategoryType | undefined {
@@ -107,6 +109,10 @@ export async function parseUrlQr(url: string): Promise<QrParseResult> {
 
     const data = await res.json();
 
+    if (data.error) {
+      throw new Error(data.error);
+    }
+
     return {
       category: detectCategory(JSON.stringify(data)) || data.category,
       thickness: parseNumber(String(data.thickness ?? '')),
@@ -116,6 +122,8 @@ export async function parseUrlQr(url: string): Promise<QrParseResult> {
       sourceUrl: url,
       note: data.note,
       raw: url,
+      fallback: data.fallback || false,
+      message: data.message,
     };
   } catch (err) {
     console.error('parseUrlQr error:', err);

@@ -21,18 +21,18 @@ function extractFromHtml(html: string): Record<string, string> {
     { key: 'thickness', regexes: [/Толщина\s*[:\-]?\s*(\d+[.,]?\d*)/i, /Thickness\s*[:\-]?\s*(\d+[.,]?\d*)/i] },
     { key: 'width', regexes: [/Ширина\s*[:\-]?\s*(\d+[.,]?\d*)/i, /Width\s*[:\-]?\s*(\d+[.,]?\d*)/i] },
     { key: 'length', regexes: [/Длина\s*[:\-]?\s*(\d+[.,]?\d*)/i, /Length\s*[:\-]?\s*(\d+[.,]?\d*)/i] },
-    { key: 'netWeight', regexes: [/Масса\s*нетто\s*[:\-]?\s*(\d+[.,]?\d*)/i, /Net\s*weight\s*[:\-]?\s*(\d+[.,]?\d*)/i, /Вес\s*нетто\s*[:\-]?\s*(\d+[.,]?\d*)/i] },
-    { key: 'grossWeight', regexes: [/Масса\s*брутто\s*[:\-]?\s*(\d+[.,]?\d*)/i, /Gross\s*weight\s*[:\-]?\s*(\d+[.,]?\d*)/i, /Вес\s*брутто\s*[:\-]?\s*(\d+[.,]?\d*)/i] },
+    { key: 'netWeight', regexes: [/Масса\s*нетто\s*[:\-]?\s*(\d+[.,]?\d*)/i, /Масса\s*нетто\s*\([^)]*\)\s*[:\-]?\s*(\d+[.,]?\d*)/i, /Net weight\s*[:\-]?\s*(\d+[.,]?\d*)/i, /Вес\s*нетто\s*[:\-]?\s*(\d+[.,]?\d*)/i] },
+    { key: 'grossWeight', regexes: [/Масса\s*брутто\s*[:\-]?\s*(\d+[.,]?\d*)/i, /Масса\s*брутто\s*\([^)]*\)\s*[:\-]?\s*(\d+[.,]?\d*)/i, /Gross weight\s*[:\-]?\s*(\d+[.,]?\d*)/i, /Вес\s*брутто\s*[:\-]?\s*(\d+[.,]?\d*)/i] },
     { key: 'meltNumber', regexes: [/Номер\s*плавки\s*[:\-]?\s*([A-Z0-9\-]+)/i, /Плавка\s*[:\-]?\s*([A-Z0-9\-]+)/i, /Heat\s*[:\-]?\s*([A-Z0-9\-]+)/i, /Melt\s*[:\-]?\s*([A-Z0-9\-]+)/i] },
-    { key: 'grade', regexes: [/Марка\s*[:\-]?\s*([A-Z0-9А-Яа-я\-]+)/i, /Grade\s*[:\-]?\s*([A-Z0-9\-]+)/i, /Steel\s*grade\s*[:\-]?\s*([A-Z0-9\-]+)/i] },
+    { key: 'grade', regexes: [/Марка\s*[:\-]?\s*([A-Z0-9А-Яа-я\-]+)/i, /Grade\s*[:\-]?\s*([A-Z0-9\-]+)/i, /Steel grade\s*[:\-]?\s*([A-Z0-9\-]+)/i] },
     { key: 'standard', regexes: [/Стандарт\s*[:\-]?\s*(ГОСТ\s*[0-9\-]+)/i, /Standard\s*[:\-]?\s*([A-Z0-9\-]+)/i] },
     { key: 'idn', regexes: [/ИДН\s*[:\-]?\s*(\d+)/i] },
     { key: 'category', regexes: [/Рулон/i, /Лист/i, /Полоса/i, /Штрипс/i] },
   ];
 
   for (const { key, regexes } of patterns) {
-    for (const regex of regexes) {
-      const match = text.match(regex);
+    for (const label of regexes) {
+      const match = text.match(label);
       if (match) {
         result[key] = match[1]?.trim() || match[0]?.trim() || '';
         break;
@@ -59,6 +59,36 @@ function extractFromHtml(html: string): Record<string, string> {
   return result;
 }
 
+async function tryNlmkApi(url: string): Promise<Record<string, unknown> | null> {
+  // Try to extract the q parameter from doc.nlmk.shop URLs
+  const qMatch = url.match(/[?&]q=([^&]+)/);
+  if (!qMatch) return null;
+  const q = qMatch[1];
+
+  // Try the internal API endpoint discovered from JS bundle
+  const apiUrl = `https://doc.nlmk.shop/api/v1/views/certificates/${encodeURIComponent(q)}?type=p&lang=ru`;
+
+  try {
+    const res = await fetch(apiUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Referer': url,
+      },
+      redirect: 'manual',
+    });
+
+    // If we get JSON back, great
+    if (res.ok && res.headers.get('content-type')?.includes('json')) {
+      return await res.json();
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
 serve(async (req) => {
   // CORS
   if (req.method === 'OPTIONS') {
@@ -82,7 +112,21 @@ serve(async (req) => {
       });
     }
 
-    // Fetch with redirect following
+    // Try NLMK API first (for doc.nlmk.shop)
+    const apiData = await tryNlmkApi(url);
+    if (apiData) {
+      return new Response(JSON.stringify({
+        sourceUrl: url,
+        ...apiData,
+      }), {
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+        },
+      });
+    }
+
+    // Fallback: fetch the page HTML and try to extract text
     const response = await fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -143,6 +187,13 @@ serve(async (req) => {
     if (extracted.meltNumber) {
       result.batchId = extracted.meltNumber;
       result.meltNumber = extracted.meltNumber;
+    }
+
+    // If we couldn't extract any meaningful data, mark as fallback
+    const hasData = result.category || result.thickness || result.quantity || result.batchId || result.grade;
+    if (!hasData) {
+      result.fallback = true;
+      result.message = 'Автоматическое распознавание недоступно для этого сертификата. Откройте ссылку в браузере и введите данные вручную.';
     }
 
     return new Response(JSON.stringify(result), {
