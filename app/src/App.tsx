@@ -52,6 +52,7 @@ function App() {
             receipts={storage.receipts}
             onAdd={storage.addReceipt}
             onDelete={storage.deleteReceipt}
+            onCheckDuplicate={storage.findDuplicateReceipt}
           />
         );
       case 'inventory':

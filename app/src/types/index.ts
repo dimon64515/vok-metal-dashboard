@@ -17,6 +17,9 @@ export interface ReceiptEntry {
   quantity: number;
   note?: string;
   createdAt: number;
+  batchId?: string;
+  sourceUrl?: string;
+  grade?: string;
 }
 
 export type CategoryType = 'coil' | 'strip' | 'sheet';

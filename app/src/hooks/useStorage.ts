@@ -6,6 +6,7 @@ import {
   fetchExpenses,
   fetchReceipts,
   fetchAdjustments,
+  fetchReceiptByBatchId,
   insertExpense,
   insertReceipt,
   insertAdjustment as insertAdjustmentDb,
@@ -107,6 +108,16 @@ export function useStorage() {
       return inserted;
     }
     throw new Error('Не удалось добавить приход');
+  }
+
+  async function findDuplicateReceipt(batchId?: string): Promise<ReceiptEntry | null> {
+    if (!batchId) return null;
+    // Check local state first
+    const localDup = receipts.find((r) => r.batchId === batchId);
+    if (localDup) return localDup;
+    // Check Supabase
+    if (!isSupabase()) return null;
+    return fetchReceiptByBatchId(batchId);
   }
 
   async function deleteReceipt(id: string) {
@@ -247,6 +258,7 @@ export function useStorage() {
     expenses, receipts, adjustments, loading, error,
     addExpense, addReceipt, addAdjustment,
     deleteExpense, deleteReceipt, deleteAdjustment,
+    findDuplicateReceipt,
     getInventory, getInventoryOnDate,
     getTodayExpenses, getMonthlyExpenses, getMonthlyReceipts,
     employees, attendance,

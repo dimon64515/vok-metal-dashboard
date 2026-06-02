@@ -79,6 +79,9 @@ export interface DbReceipt {
   quantity: number;
   note: string | null;
   created_at: string;
+  batch_id: string | null;
+  source_url: string | null;
+  grade: string | null;
 }
 
 function dbToExpense(db: DbExpense): ExpenseEntry {
@@ -103,6 +106,9 @@ function dbToReceipt(db: DbReceipt): ReceiptEntry {
     quantity: db.quantity,
     note: db.note || undefined,
     createdAt: new Date(db.created_at).getTime(),
+    batchId: db.batch_id || undefined,
+    sourceUrl: db.source_url || undefined,
+    grade: db.grade || undefined,
   };
 }
 
@@ -162,6 +168,9 @@ export async function insertReceipt(
         thickness: entry.thickness,
         quantity: entry.quantity,
         note: entry.note || null,
+        batch_id: entry.batchId || null,
+        source_url: entry.sourceUrl || null,
+        grade: entry.grade || null,
       }),
     }) as DbReceipt[];
     return data && data[0] ? dbToReceipt(data[0]) : null;
@@ -184,6 +193,16 @@ export async function deleteReceipt(id: string): Promise<void> {
     await supaFetch(`/receipts?id=eq.${id}`, { method: 'DELETE' });
   } catch (err) {
     console.error('deleteReceipt error:', err);
+  }
+}
+
+export async function fetchReceiptByBatchId(batchId: string): Promise<ReceiptEntry | null> {
+  try {
+    const data = await supaFetch(`/receipts?batch_id=eq.${encodeURIComponent(batchId)}&select=*&limit=1`) as DbReceipt[];
+    return data && data[0] ? dbToReceipt(data[0]) : null;
+  } catch (err) {
+    console.error('fetchReceiptByBatchId error:', err);
+    return null;
   }
 }
 

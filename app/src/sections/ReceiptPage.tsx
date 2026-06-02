@@ -1,15 +1,28 @@
 import { useState } from 'react';
 import { loadCategories } from '@/types';
 import type { ReceiptEntry, CategoryType } from '@/types';
-import { Calendar, Trash2, ChevronDown, Filter } from 'lucide-react';
+import { Calendar, Trash2, ChevronDown, Filter, ScanLine, ExternalLink } from 'lucide-react';
+import { QrScannerModal } from '@/components/QrScannerModal';
+import { parseQrContent, type QrParseResult } from '@/lib/qrParser';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 interface ReceiptPageProps {
   receipts: ReceiptEntry[];
   onAdd: (entry: Omit<ReceiptEntry, 'id' | 'createdAt'>) => Promise<ReceiptEntry | null>;
   onDelete: (id: string) => Promise<void>;
+  onCheckDuplicate: (batchId?: string) => Promise<ReceiptEntry | null>;
 }
 
-export function ReceiptPage({ receipts, onAdd, onDelete }: ReceiptPageProps) {
+export function ReceiptPage({ receipts, onAdd, onDelete, onCheckDuplicate }: ReceiptPageProps) {
   const [categories] = useState(() => loadCategories());
   const [date, setDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [category, setCategory] = useState<CategoryType>('coil');
@@ -18,6 +31,15 @@ export function ReceiptPage({ receipts, onAdd, onDelete }: ReceiptPageProps) {
   const [note, setNote] = useState('');
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [filterCategory, setFilterCategory] = useState<CategoryType | 'all'>('all');
+
+  // QR scanner state
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scannedData, setScannedData] = useState<QrParseResult | null>(null);
+  const [parsingQr, setParsingQr] = useState(false);
+
+  // Duplicate alert state
+  const [duplicateEntry, setDuplicateEntry] = useState<ReceiptEntry | null>(null);
+  const [pendingEntry, setPendingEntry] = useState<Omit<ReceiptEntry, 'id' | 'createdAt'> | null>(null);
 
   const thicknesses = categories[category].thicknesses;
   const [submitting, setSubmitting] = useState(false);
@@ -42,6 +64,89 @@ export function ReceiptPage({ receipts, onAdd, onDelete }: ReceiptPageProps) {
     filterCategory === 'all' ? true : r.category === filterCategory
   );
 
+  const handleScan = async (rawText: string) => {
+    setScannerOpen(false);
+    setParsingQr(true);
+    try {
+      const result = await parseQrContent(rawText);
+      setScannedData(result);
+
+      // Pre-fill preview form
+      if (result.category) setCategory(result.category);
+      if (result.thickness) {
+        const catThicks = categories[result.category ?? category].thicknesses;
+        if (catThicks.includes(result.thickness)) {
+          setThickness(result.thickness);
+        } else {
+          setThickness(catThicks[0] ?? result.thickness);
+        }
+      }
+      setQuantity(result.quantity ? String(result.quantity) : '');
+      setNote(result.note || '');
+    } catch (err) {
+      console.error('QR parse error:', err);
+      alert('Не удалось распознать QR-код');
+    } finally {
+      setParsingQr(false);
+    }
+  };
+
+  const handleAddScanned = async () => {
+    if (!scannedData) return;
+    const q = parseFloat(quantity.replace(',', '.'));
+    if (!q || q <= 0) return;
+
+    const entry: Omit<ReceiptEntry, 'id' | 'createdAt'> = {
+      date,
+      category,
+      thickness,
+      quantity: q,
+      note: note || undefined,
+      batchId: scannedData.batchId || undefined,
+      grade: scannedData.grade || undefined,
+      sourceUrl: scannedData.sourceUrl || undefined,
+    };
+
+    // Check duplicate
+    const dup = await onCheckDuplicate(entry.batchId);
+    if (dup) {
+      setDuplicateEntry(dup);
+      setPendingEntry(entry);
+      return;
+    }
+
+    await submitEntry(entry);
+  };
+
+  const submitEntry = async (entry: Omit<ReceiptEntry, 'id' | 'createdAt'>) => {
+    setSubmitting(true);
+    try {
+      await onAdd(entry);
+      setScannedData(null);
+      setQuantity('');
+      setNote('');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleForceAdd = async () => {
+    setDuplicateEntry(null);
+    if (pendingEntry) {
+      await submitEntry(pendingEntry);
+    }
+    setPendingEntry(null);
+  };
+
+  const handleCancelDuplicate = () => {
+    setDuplicateEntry(null);
+    setPendingEntry(null);
+  };
+
+  const openUrl = (url?: string) => {
+    if (url) window.open(url, '_blank');
+  };
+
   return (
     <div className="space-y-5 pb-20">
       <div className="flex items-center justify-between">
@@ -49,14 +154,23 @@ export function ReceiptPage({ receipts, onAdd, onDelete }: ReceiptPageProps) {
           <h1 className="text-2xl font-bold text-[#e8ecf4]">Приход на склад</h1>
           <p className="text-sm text-[#8b95b5] mt-1">Запишите поступление металла</p>
         </div>
-        <button
-          onClick={() => setShowDatePicker(!showDatePicker)}
-          className="flex items-center gap-2 px-3 py-2 bg-[#1e2740] border border-[#2a3454] rounded-xl text-[#8b95b5] hover:text-[#e8ecf4] transition-colors"
-        >
-          <Calendar className="w-4 h-4" />
-          <span className="text-sm">{date.split('-').reverse().join('.')}</span>
-          <ChevronDown className="w-3 h-3" />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setScannerOpen(true)}
+            className="flex items-center gap-2 px-3 py-2 bg-[#f59e0b] hover:bg-[#d97706] text-[#1a1a2e] rounded-xl text-sm font-medium transition-colors"
+          >
+            <ScanLine className="w-4 h-4" />
+            <span className="hidden sm:inline">Сканировать QR</span>
+          </button>
+          <button
+            onClick={() => setShowDatePicker(!showDatePicker)}
+            className="flex items-center gap-2 px-3 py-2 bg-[#1e2740] border border-[#2a3454] rounded-xl text-[#8b95b5] hover:text-[#e8ecf4] transition-colors"
+          >
+            <Calendar className="w-4 h-4" />
+            <span className="text-sm">{date.split('-').reverse().join('.')}</span>
+            <ChevronDown className="w-3 h-3" />
+          </button>
+        </div>
       </div>
 
       {showDatePicker && (
@@ -68,85 +182,202 @@ export function ReceiptPage({ receipts, onAdd, onDelete }: ReceiptPageProps) {
         />
       )}
 
-      <div className="bg-[#141b2d] border border-[#2a3454] rounded-2xl p-5 space-y-5">
-        {/* Category selector */}
-        <div className="space-y-2">
-          <label className="text-xs font-medium text-[#8b95b5] uppercase tracking-wider">Тип металла</label>
-          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-            {(Object.entries(categories) as [CategoryType, typeof categories.coil][]).map(([key, cfg]) => (
+      {/* Scanned data preview */}
+      {scannedData && (
+        <div className="bg-[#141b2d] border border-[#f59e0b]/30 rounded-2xl p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ScanLine className="w-5 h-5 text-[#f59e0b]" />
+              <h3 className="text-sm font-semibold text-[#e8ecf4]">Данные из QR-кода</h3>
+            </div>
+            {scannedData.sourceUrl && (
               <button
-                key={key}
-                onClick={() => {
-                  setCategory(key);
-                  setThickness(cfg.thicknesses[0]);
-                }}
-                className={`flex-shrink-0 px-5 py-2.5 rounded-full text-sm font-medium transition-all duration-150 ${
-                  category === key
-                    ? 'bg-[#f59e0b] text-[#1a1a2e]'
-                    : 'bg-[#1e2740] text-[#8b95b5] hover:text-[#e8ecf4]'
-                }`}
+                onClick={() => openUrl(scannedData.sourceUrl)}
+                className="flex items-center gap-1 text-xs text-[#3b82f6] hover:text-[#60a5fa] transition-colors"
               >
-                {cfg.label}
+                <ExternalLink className="w-3 h-3" />
+                Открыть ссылку
               </button>
-            ))}
+            )}
+          </div>
+
+          {scannedData.batchId && (
+            <div className="text-xs text-[#8b95b5]">
+              Плавка / ID: <span className="text-[#e8ecf4] font-mono">{scannedData.batchId}</span>
+              {scannedData.grade && (
+                <span className="ml-2">Марка: <span className="text-[#e8ecf4]">{scannedData.grade}</span></span>
+              )}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-[#8b95b5] uppercase tracking-wider">Тип металла</label>
+              <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+                {(Object.entries(categories) as [CategoryType, typeof categories.coil][]).map(([key, cfg]) => (
+                  <button
+                    key={key}
+                    onClick={() => {
+                      setCategory(key);
+                      setThickness(cfg.thicknesses[0]);
+                    }}
+                    className={`flex-shrink-0 px-4 py-2 rounded-full text-sm font-medium transition-all duration-150 ${
+                      category === key
+                        ? 'bg-[#f59e0b] text-[#1a1a2e]'
+                        : 'bg-[#1e2740] text-[#8b95b5] hover:text-[#e8ecf4]'
+                    }`}
+                  >
+                    {cfg.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-[#8b95b5] uppercase tracking-wider">Толщина, мм</label>
+              <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+                {thicknesses.map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setThickness(t)}
+                    className={`flex-shrink-0 w-16 h-12 rounded-xl text-sm font-bold transition-all duration-150 ${
+                      thickness === t
+                        ? 'bg-[rgba(245,158,11,0.2)] text-[#f59e0b] border border-[#f59e0b]/40'
+                        : 'bg-[#1e2740] text-[#e8ecf4] border border-[#2a3454] hover:border-[#3d4f7a]'
+                    }`}
+                  >
+                    {t.toFixed(t < 1 ? 2 : 1)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-[#8b95b5] uppercase tracking-wider">
+                {category === 'sheet' ? 'Количество, шт' : 'Масса, кг'}
+              </label>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+                placeholder="0"
+                className="w-full h-14 px-4 bg-[#1e2740] border border-[#2a3454] rounded-xl text-[#e8ecf4] text-lg font-semibold placeholder:text-[#4a5578] focus:border-[#3d4f7a] focus:ring-2 focus:ring-[rgba(245,158,11,0.25)] outline-none transition-all"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-[#8b95b5] uppercase tracking-wider">Примечание</label>
+              <input
+                type="text"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="Поставщик, номер накладной..."
+                className="w-full h-14 px-4 bg-[#1e2740] border border-[#2a3454] rounded-xl text-[#e8ecf4] text-sm placeholder:text-[#4a5578] focus:border-[#3d4f7a] focus:ring-2 focus:ring-[rgba(245,158,11,0.25)] outline-none transition-all"
+              />
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+            <button
+              onClick={handleAddScanned}
+              disabled={!quantity || parseFloat(quantity.replace(',', '.')) <= 0 || submitting}
+              className="flex-1 h-14 bg-[#f59e0b] hover:bg-[#d97706] disabled:opacity-40 disabled:cursor-not-allowed text-[#1a1a2e] font-semibold rounded-xl transition-all duration-150 active:scale-[0.98]"
+            >
+              {submitting ? 'Сохранение...' : 'Добавить приход'}
+            </button>
+            <button
+              onClick={() => { setScannedData(null); setQuantity(''); setNote(''); }}
+              className="h-14 px-5 bg-[#1e2740] border border-[#2a3454] text-[#8b95b5] rounded-xl hover:text-[#e8ecf4] transition-colors"
+            >
+              Отмена
+            </button>
           </div>
         </div>
+      )}
 
-        {/* Thickness selector */}
-        <div className="space-y-2">
-          <label className="text-xs font-medium text-[#8b95b5] uppercase tracking-wider">Толщина, мм</label>
-          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-            {thicknesses.map((t) => (
-              <button
-                key={t}
-                onClick={() => setThickness(t)}
-                className={`flex-shrink-0 w-16 h-12 rounded-xl text-sm font-bold transition-all duration-150 ${
-                  thickness === t
-                    ? 'bg-[rgba(245,158,11,0.2)] text-[#f59e0b] border border-[#f59e0b]/40'
-                    : 'bg-[#1e2740] text-[#e8ecf4] border border-[#2a3454] hover:border-[#3d4f7a]'
-                }`}
-              >
-                {t.toFixed(t < 1 ? 2 : 1)}
-              </button>
-            ))}
+      {/* Manual entry form (hidden when preview is active or shown alongside) */}
+      {!scannedData && (
+        <div className="bg-[#141b2d] border border-[#2a3454] rounded-2xl p-5 space-y-5">
+          {/* Category selector */}
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-[#8b95b5] uppercase tracking-wider">Тип металла</label>
+            <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+              {(Object.entries(categories) as [CategoryType, typeof categories.coil][]).map(([key, cfg]) => (
+                <button
+                  key={key}
+                  onClick={() => {
+                    setCategory(key);
+                    setThickness(cfg.thicknesses[0]);
+                  }}
+                  className={`flex-shrink-0 px-5 py-2.5 rounded-full text-sm font-medium transition-all duration-150 ${
+                    category === key
+                      ? 'bg-[#f59e0b] text-[#1a1a2e]'
+                      : 'bg-[#1e2740] text-[#8b95b5] hover:text-[#e8ecf4]'
+                  }`}
+                >
+                  {cfg.label}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
 
-        {/* Quantity input */}
-        <div className="space-y-2">
-          <label className="text-xs font-medium text-[#8b95b5] uppercase tracking-wider">
-            {category === 'sheet' ? 'Количество, шт' : 'Масса, кг'}
-          </label>
-          <input
-            type="text"
-            inputMode="decimal"
-            value={quantity}
-            onChange={(e) => setQuantity(e.target.value)}
-            placeholder="0"
-            className="w-full h-14 px-4 bg-[#1e2740] border border-[#2a3454] rounded-xl text-[#e8ecf4] text-lg font-semibold placeholder:text-[#4a5578] focus:border-[#3d4f7a] focus:ring-2 focus:ring-[rgba(245,158,11,0.25)] outline-none transition-all"
-          />
-        </div>
+          {/* Thickness selector */}
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-[#8b95b5] uppercase tracking-wider">Толщина, мм</label>
+            <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+              {thicknesses.map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setThickness(t)}
+                  className={`flex-shrink-0 w-16 h-12 rounded-xl text-sm font-bold transition-all duration-150 ${
+                    thickness === t
+                      ? 'bg-[rgba(245,158,11,0.2)] text-[#f59e0b] border border-[#f59e0b]/40'
+                      : 'bg-[#1e2740] text-[#e8ecf4] border border-[#2a3454] hover:border-[#3d4f7a]'
+                  }`}
+                >
+                  {t.toFixed(t < 1 ? 2 : 1)}
+                </button>
+              ))}
+            </div>
+          </div>
 
-        {/* Note input */}
-        <div className="space-y-2">
-          <label className="text-xs font-medium text-[#8b95b5] uppercase tracking-wider">Примечание</label>
-          <input
-            type="text"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="Поставщик, номер накладной..."
-            className="w-full h-12 px-4 bg-[#1e2740] border border-[#2a3454] rounded-xl text-[#e8ecf4] text-sm placeholder:text-[#4a5578] focus:border-[#3d4f7a] focus:ring-2 focus:ring-[rgba(245,158,11,0.25)] outline-none transition-all"
-          />
-        </div>
+          {/* Quantity input */}
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-[#8b95b5] uppercase tracking-wider">
+              {category === 'sheet' ? 'Количество, шт' : 'Масса, кг'}
+            </label>
+            <input
+              type="text"
+              inputMode="decimal"
+              value={quantity}
+              onChange={(e) => setQuantity(e.target.value)}
+              placeholder="0"
+              className="w-full h-14 px-4 bg-[#1e2740] border border-[#2a3454] rounded-xl text-[#e8ecf4] text-lg font-semibold placeholder:text-[#4a5578] focus:border-[#3d4f7a] focus:ring-2 focus:ring-[rgba(245,158,11,0.25)] outline-none transition-all"
+            />
+          </div>
 
-        <button
-          onClick={handleSubmit}
-          disabled={!quantity || parseFloat(quantity.replace(',', '.')) <= 0 || submitting}
-          className="w-full h-14 bg-[#f59e0b] hover:bg-[#d97706] disabled:opacity-40 disabled:cursor-not-allowed text-[#1a1a2e] font-semibold rounded-xl transition-all duration-150 active:scale-[0.98]"
-        >
-          {submitting ? 'Сохранение...' : 'Записать приход'}
-        </button>
-      </div>
+          {/* Note input */}
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-[#8b95b5] uppercase tracking-wider">Примечание</label>
+            <input
+              type="text"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Поставщик, номер накладной..."
+              className="w-full h-12 px-4 bg-[#1e2740] border border-[#2a3454] rounded-xl text-[#e8ecf4] text-sm placeholder:text-[#4a5578] focus:border-[#3d4f7a] focus:ring-2 focus:ring-[rgba(245,158,11,0.25)] outline-none transition-all"
+            />
+          </div>
+
+          <button
+            onClick={handleSubmit}
+            disabled={!quantity || parseFloat(quantity.replace(',', '.')) <= 0 || submitting}
+            className="w-full h-14 bg-[#f59e0b] hover:bg-[#d97706] disabled:opacity-40 disabled:cursor-not-allowed text-[#1a1a2e] font-semibold rounded-xl transition-all duration-150 active:scale-[0.98]"
+          >
+            {submitting ? 'Сохранение...' : 'Записать приход'}
+          </button>
+        </div>
+      )}
 
       {/* History */}
       <div className="space-y-3">
@@ -220,6 +451,12 @@ export function ReceiptPage({ receipts, onAdd, onDelete }: ReceiptPageProps) {
                   {entry.note && (
                     <p className="text-xs text-[#4a5578] mt-0.5 truncate">{entry.note}</p>
                   )}
+                  {entry.batchId && (
+                    <p className="text-[10px] text-[#4a5578] mt-0.5 font-mono truncate">
+                      Плавка: {entry.batchId}
+                      {entry.grade ? ` · ${entry.grade}` : ''}
+                    </p>
+                  )}
                 </div>
                 <button
                   onClick={async () => { await onDelete(entry.id); }}
@@ -239,6 +476,55 @@ export function ReceiptPage({ receipts, onAdd, onDelete }: ReceiptPageProps) {
           </div>
         )}
       </div>
+
+      <QrScannerModal open={scannerOpen} onClose={() => setScannerOpen(false)} onScan={handleScan} />
+
+      {/* Duplicate alert */}
+      <AlertDialog open={!!duplicateEntry} onOpenChange={(open) => { if (!open) handleCancelDuplicate(); }}>
+        <AlertDialogContent className="bg-[#141b2d] border-[#2a3454] text-[#e8ecf4]">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Дубликат обнаружен</AlertDialogTitle>
+            <AlertDialogDescription className="text-[#8b95b5]">
+              Металл с плавкой <strong className="text-[#e8ecf4]">{duplicateEntry?.batchId}</strong> уже добавлен{' '}
+              {duplicateEntry?.date && (
+                <span>
+                  {new Date(duplicateEntry.date).toLocaleDateString('ru-RU', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                  })}
+                </span>
+              )}.
+              <br />
+              Вы уверены, что хотите добавить ещё раз?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={handleCancelDuplicate}
+              className="bg-[#1e2740] border-[#2a3454] text-[#e8ecf4] hover:bg-[#2a3454] hover:text-[#e8ecf4]"
+            >
+              Отмена
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleForceAdd}
+              className="bg-[#f59e0b] text-[#1a1a2e] hover:bg-[#d97706]"
+            >
+              Добавить всё равно
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Parsing overlay */}
+      {parsingQr && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-10 h-10 border-3 border-[#f59e0b] border-t-transparent rounded-full animate-spin" />
+            <p className="text-sm text-[#8b95b5]">Распознавание QR-кода...</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
